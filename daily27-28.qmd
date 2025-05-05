@@ -1,0 +1,111 @@
+---
+title: "daily27-28"
+format:
+  html:
+    self-contained: true
+execute:
+  echo: true
+---
+
+```{r}
+library(sf)
+library(terra)
+library(osmdata)
+library(dplyr)
+
+```
+
+```{r}
+bbox <- getbb("Fort Collins, Colorado")
+waterways <- opq(bbox) %>%
+  add_osm_feature(key = "waterway") %>%
+  osmdata_sf()
+
+poudre_river <- waterways$osm_lines %>%
+  filter(grepl("Cache la Poudre", name)) %>%
+  st_union() %>%
+  st_as_sf()
+
+river_length <- st_length(poudre_river)
+
+poudre_pts <- st_cast(poudre_river, "POINT")
+```
+
+```{r}
+library(terra)
+
+Sys.setenv("AWS_NO_SIGN_REQUEST" = "YES")
+
+dem <- rast("/vsis3/lynker-spatial/gridded-resources/dem.vrt")
+```
+
+```{r}
+poudre_river_proj <- st_transform(poudre_river, crs(dem))
+
+dem_crop <- crop(dem, poudre_river_proj)
+
+elev_vals <- extract(dem_crop, poudre_pts)
+
+```
+
+```{r}
+river_profile <- bind_cols(poudre_pts, elev_vals) %>%
+  mutate(ID = row_number())
+```
+
+```{r}
+library(ggplot2)
+
+ggplot(river_profile, aes(x = ID, y = dem)) +
+  geom_line(color = "blue", linewidth = 1.2) +
+  labs(
+    title = "Elevation Profile of Cache la Poudre River",
+    x = "Point along river",
+    y = "Elevation (cm)"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+inlet <- head(poudre_pts, 1)
+outlet <- tail(poudre_pts, 1)
+
+line <- st_union(inlet, outlet) |> st_cast("LINESTRING")
+
+straight_dist <- st_length(line)
+river_len <- st_length(poudre_river_proj)
+
+sinuosity <- as.numeric(river_len / straight_dist)
+
+```
+
+
+```{r}
+end_pts <- rbind(inlet, outlet)
+
+elev_ends <- extract(dem_crop, end_pts)
+
+```
+
+```{r}
+elev_diff <- elev_ends$dem[1] - elev_ends$dem[2]
+
+river_len_meters <- units::drop_units(river_len) / 100  # cm to meters
+
+slope_percent <- 100 * elev_diff / river_len_meters
+slope_percent
+
+```
+
+```{r}
+ggplot(river_profile) +
+  geom_sf(aes(color = dem), size = 1) +
+  scale_color_viridis_c(option = "plasma") +
+  labs(
+    title = "Cache la Poudre River Colored by Elevation",
+    color = "Elevation (cm)"
+  ) +
+  theme_minimal()
+
+```
+
